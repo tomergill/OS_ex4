@@ -1,38 +1,42 @@
+/*******************************************************************************
+ * Student name: Tomer Gill
+ * Student: 318459450
+ * Course Exercise Group: 01 (CS student, actual group is 89231-03)
+ * Exercise name: Exercise 4
+*******************************************************************************/
 #include <stdio.h>
 #include <sys/shm.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <sys/types.h>
-#include <sys/ipc.h>
 #include <sys/sem.h>
-#include <errno.h>
 
-#define SHM_NAME "318459450.txt"
-#define SHM_CHAR 'T'
-#define SHM_SIZE 1024
-#define SEMNUM 2
-#define SEM_WRITE 0
-#define SEM_READ 1
-#define LOCK -1
-#define UNLOCK 1
+#define KEY_FILE "318459450.txt" //file for key
+#define KEY_CHAR 'T' //char for key
+#define SHM_SIZE 1024 //size of shared mem
+#define SEMNUM 2 //num of semaphores
+#define SEM_WRITE 0 //index of write semaphore
+#define SEM_READ 1  //index of read semaphore
+#define LOCK -1 //the sem_op for lock
+#define UNLOCK 1 //the sem_op for unlock
 
-
+/*//for using sempahores
 union semun {
     int val;
     struct semid_ds *buf;
     ushort *array;
-};
+};*/
+
 
 int main() {
-    int         shmid;
-    key_t       key;
-    char        *data, action;
-    int         semid;
-    union semun semarg;
-    struct sembuf sops[SEMNUM];
+    int             shmid;
+    key_t           key;
+    char            *data, action;
+    int             semid;
+//    union semun     semarg;
+    struct sembuf   sops[SEMNUM];
 
     /* get key to shared memory */
-    if ((key = ftok(SHM_NAME, SHM_CHAR)) == -1) {
+    if ((key = ftok(KEY_FILE, KEY_CHAR)) == -1) {
         perror("ftok error");
         exit(EXIT_FAILURE);
     }
