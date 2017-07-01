@@ -11,16 +11,18 @@
 #include <sys/sem.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <string.h>
 
 #define FILE_NAME "318459450.txt" //file for key
-#define KEY_FILE FILE_NAME //file for key
-#define KEY_CHAR 'T' //char for key
-#define SHM_SIZE 1024 //size of shared mem
-#define SEMNUM 2 //num of semaphores
-#define SEM_WRITE 0 //index of write semaphore
-#define SEM_READ 1  //index of read semaphore
-#define LOCK -1 //the sem_op for lock
-#define UNLOCK 1 //the sem_op for unlock
+#define KEY_FILE FILE_NAME        //file for key
+#define KEY_CHAR       'T'        //char for key
+#define SHM_SIZE     1024         //size of shared mem
+#define SEMNUM          2         //num of semaphores
+#define SEM_WRITE       0         //index of write semaphore
+#define SEM_READ        1         //index of read semaphore
+#define LOCK           -1         //the sem_op for lock
+#define UNLOCK          1         //the sem_op for unlock
 #define THREADPOOL_SIZE 5
 
 union semun {
@@ -46,7 +48,8 @@ Queue *jobQueue = NULL;
 char *data = NULL;
 pthread_t threadPool[THREADPOOL_SIZE];
 int semid = -1;
-pthread_mutex_t queueMutex;
+pthread_mutex_t queueMutex, countMutex, fileMutex;
+int internal_count = 0;
 
 char Dequeue()
 {
@@ -114,6 +117,115 @@ void atExitFunc() {
     if (semid >= 0)
         if (semctl(semid, SEMNUM, IPC_RMID) == -1)
             perror("delete semaphores failed");
+    pthread_mutex_destroy(&queueMutex);
+    pthread_mutex_destroy(&countMutex);
+    pthread_mutex_destroy(&fileMutex);
+}
+
+void AddToInternalCount(int amount)
+{
+    if (pthread_mutex_lock(&countMutex) != 0)
+    {
+        perror("error locking countMutex in add");
+        return;
+    }
+    internal_count += amount;
+    if (pthread_mutex_unlock(&countMutex) != 0)
+    {
+        perror("error unlocking countMutex in add");
+        return;
+    }
+}
+
+int GetInternalCount()
+{
+    int temp;
+    if (pthread_mutex_lock(&countMutex) != 0)
+    {
+        perror("error locking countMutex in add");
+        return -1;
+    }
+    temp = internal_count;
+    if (pthread_mutex_unlock(&countMutex) != 0)
+    {
+        perror("error unlocking countMutex in add");
+        return -1;
+    }
+    return temp;
+}
+
+void WriteToFileInternalCount(int fd)
+{
+    int temp = GetInternalCount();
+    char buff[100];
+    sprintf(buff, "thread identifier is %u and internal_count is %d\n",
+            pthread_self(), temp);
+    if (write(fd, buff, strlen(buff)) == -1)
+    {
+        perror("write error");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void* threadFunc(void *arg)
+{
+    int fd = *(int *) arg, x, amount, i;
+    char action;
+    struct timespec t;
+
+    //TODO remove this crap
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+    while (1)
+    {
+        amount = 0;
+        action = Dequeue(); //get the job
+        switch (action)
+        {
+            default:
+                break;
+            case 'e':
+                ++amount; //+5
+            case 'd':
+                ++amount; //+4
+            case 'c':
+                ++amount; //+3
+            case 'b':
+                ++amount; //+2
+            case 'a':
+                ++amount; //+1
+                break;
+            case 'f':
+                WriteToFileInternalCount(fd);
+                break;
+            case 'g':
+                for (i = 0; i < THREADPOOL_SIZE; ++i)
+                    if (threadPool[i] != pthread_self())
+                        if (pthread_cancel(threadPool[i]) != 0)
+                            perror("error closing thread");
+                WriteToFileInternalCount(fd);
+                if (close(fd) != 0)
+                    perror("close error g");
+                exit(EXIT_SUCCESS);
+            case 'h':
+                for (i = 0; i < THREADPOOL_SIZE; ++i)
+                    if (threadPool[i] != pthread_self())
+                        if (pthread_join(threadPool[i], NULL) != 0)
+                            perror("error joining thread");
+                WriteToFileInternalCount(fd);
+                if (close(fd) != 0)
+                    perror("close error h");
+                exit(EXIT_SUCCESS);
+                break;
+        }
+        // for letters a to e
+        x = rand() % 91 + 10; // 10<=x<=100
+        t.tv_nsec = x;
+        t.tv_sec =0;
+        nanosleep(&t, NULL);
+        AddToInternalCount(amount);
+    }
+#pragma clang diagnostic pop
 }
 
 int main()
@@ -181,6 +293,18 @@ int main()
         exit(EXIT_FAILURE);
     }
 
+    if (pthread_mutex_init(&countMutex, PTHREAD_MUTEX_ERRORCHECK) != 0)
+    {
+        perror("count mutex error");
+        exit(EXIT_FAILURE);
+    }
+
+    if (pthread_mutex_init(&fileMutex, PTHREAD_MUTEX_ERRORCHECK) != 0)
+    {
+        perror("file mutex error");
+        exit(EXIT_FAILURE);
+    }
+
     //setting values
     semarg.array[SEM_READ] = 0;
     semarg.array[SEM_WRITE] = 0;
@@ -191,7 +315,8 @@ int main()
     }
 
     for (i =0; i < THREADPOOL_SIZE; ++i)
-        pthread_create(&(threadPool[i]), NULL, NULL, NULL); //TODO func call
+        pthread_create(&(threadPool[i]), NULL, threadFunc, NULL); //TODO func
+    // call
 
     sops[0].sem_flg = 0;
 
