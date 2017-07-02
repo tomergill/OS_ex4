@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <sys/sem.h>
+#include <errno.h>
 
 #define KEY_FILE "318459450.txt" //file for key
 #define KEY_CHAR 'T' //char for key
@@ -19,15 +20,9 @@
 #define LOCK -1 //the sem_op for lock
 #define UNLOCK 1 //the sem_op for unlock
 
-/*//for using sempahores
-union semun {
-    int val;
-    struct semid_ds *buf;
-    ushort *array;
-};*/
 
-
-int main() {
+int main()
+{
     int             shmid;
     key_t           key;
     char            *data, action;
@@ -80,6 +75,8 @@ int main() {
         sops->sem_num = SEM_WRITE;
         if (semop(semid, sops, 1) < 0) //lock the write semaphore
         {
+            if (errno == EIDRM || errno == EINVAL)
+                break; //server is dead
             perror("error locking write semaphore");
             if (shmdt(data) == -1) {
                 perror("shared memory detach error");
@@ -87,6 +84,7 @@ int main() {
         }
 
         *data = action; //write to shared mem
+        printf("writted to shared mem action %c\n", action);
 
         sops->sem_op = UNLOCK;
         sops->sem_num = SEM_READ;
@@ -100,21 +98,14 @@ int main() {
         //now to next action
     } while (1);
 
+    printf("finising up\n");
+    //TODO remove printfs
+
     //detaching from shared memory
     if (shmdt(data) == -1) {
         perror("shared memory detach error");
-        /*if (semctl(semid, SEMNUM, IPC_RMID) == -1 && errno != EPERM)
-        {
-            perror("delete semaphore error");
-        }*/
         exit(EXIT_FAILURE);
     }
-
-    /*if (semctl(semid, SEMNUM, IPC_RMID) == -1 && errno != EPERM)
-    {
-        perror("delete semaphore error");
-        exit(EXIT_FAILURE);
-    }*/
 
     exit(EXIT_SUCCESS);
 }

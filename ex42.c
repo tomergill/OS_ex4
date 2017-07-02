@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <sys/shm.h>
 #include <stdlib.h>
-#include <ctype.h>
 #include <sys/sem.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -57,6 +56,7 @@ int             internal_count                       = 0;
 char Dequeue()
 {
     char c;
+
     /* decreasing the queue semaphore */
     struct sembuf sops[1];
     sops->sem_flg = 0;
@@ -66,7 +66,8 @@ char Dequeue()
         perror("-1 queue semaphore error dequeue");
 
     /* locking the queue mutex */
-    if (pthread_mutex_lock(&queueMutex) != 0) {
+    if (pthread_mutex_lock(&queueMutex) != 0)
+    {
         perror("error locking queueMutex in dequeue");
         sops->sem_num = SEM_QUEUE;
         sops->sem_op = 1; //"unlock"
@@ -86,7 +87,8 @@ char Dequeue()
     QueueItem *temp = jobQueue->first;
     jobQueue->first = jobQueue->first->next; //"pop"
 
-    if (pthread_mutex_unlock(&queueMutex) != 0) {
+    if (pthread_mutex_unlock(&queueMutex) != 0)
+    {
         perror("error unlocking queueMutex in dequeue");
         return (char) -1;
     }
@@ -97,17 +99,20 @@ char Dequeue()
     return c;
 }
 
-void Enqueue(char c) {
+void Enqueue(char c)
+{
 
     QueueItem *item = (QueueItem *) calloc(1, sizeof(QueueItem));
-    if (item == NULL) {
+    if (item == NULL)
+    {
         perror("CALLOC ERROR");
         return;
     }
     item->next = NULL;
     item->action = c;
 
-    if (pthread_mutex_lock(&queueMutex) != 0) {
+    if (pthread_mutex_lock(&queueMutex) != 0)
+    {
         perror("error locking queueMutex in enqueue");
         return;
     }
@@ -123,21 +128,35 @@ void Enqueue(char c) {
     if (semop(semid, sops, 1) != 0)
         perror("+1 queue semaphore error enqueue");
 
-    if (pthread_mutex_unlock(&queueMutex) != 0) {
+    if (pthread_mutex_unlock(&queueMutex) != 0)
+    {
         perror("error unlocking queueMutex in enqueue");
         return;
     }
 }
 
-void AtExitFunc() {
+void AtExitFunc()
+{
+    /* freeing the queue */
     if (jobQueue != NULL)
+    {
+        QueueItem *i = jobQueue->first, *temp;
+        while (i != NULL)
+        {
+            temp = i;
+            i = i->next;
+            free(temp);
+        }
         free(jobQueue);
+    }
+
     if (data != NULL)
         if (shmdt(data) == -1)
             perror("shared memory detach error");
     if (semid >= 0)
         if (semctl(semid, SEMNUM, IPC_RMID) == -1)
             perror("delete semaphores failed");
+
     //unlocking in case mutex was locked when exiting
     pthread_mutex_unlock(&queueMutex);
     pthread_mutex_unlock(&countMutex);
@@ -151,55 +170,64 @@ void AtExitFunc() {
     perror("error destroying file mutex");
 }
 
-void AddToInternalCount(int amount) {
-    if (pthread_mutex_lock(&countMutex) != 0) {
+void AddToInternalCount(int amount)
+{
+    if (pthread_mutex_lock(&countMutex) != 0)
+    {
         perror("error locking countMutex in add");
         return;
     }
     internal_count += amount;
-    if (pthread_mutex_unlock(&countMutex) != 0) {
+    if (pthread_mutex_unlock(&countMutex) != 0)
+    {
         perror("error unlocking countMutex in add");
         return;
     }
 }
 
-int GetInternalCount() {
+int GetInternalCount()
+{
     int temp;
-    if (pthread_mutex_lock(&countMutex) != 0) {
+    if (pthread_mutex_lock(&countMutex) != 0)
+    {
         perror("error locking countMutex in add");
         return -1;
     }
     temp = internal_count;
-    if (pthread_mutex_unlock(&countMutex) != 0) {
+    if (pthread_mutex_unlock(&countMutex) != 0)
+    {
         perror("error unlocking countMutex in add");
         return -1;
     }
     return temp;
 }
 
-void WriteToFileInternalCount(int fd) {
+void WriteToFileInternalCount(int fd)
+{
     int temp = GetInternalCount();
     char buff[100];
     sprintf(buff, "thread identifier is %u and internal_count is %d\n",
             pthread_self(), temp);
-    if (write(fd, buff, strlen(buff)) == -1) {
+    if (write(fd, buff, strlen(buff)) == -1)
+    {
         perror("write error");
         exit(EXIT_FAILURE);
     }
 }
 
-void *ThreadFunc(void *arg) {
+void *ThreadFunc(void *arg)
+{
     int fd = *(int *) arg, x, amount, i;
     char action;
     struct timespec t;
 
-    //TODO remove this crap
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-noreturn"
-    while (1) {
+    while (1)
+    {
         amount = 0;
         action = Dequeue(); //get the job
-        switch (action) {
+        printf("doing %c\n", action);
+        switch (action)
+        {
             default:
                 break;
             case 'e':
@@ -213,7 +241,8 @@ void *ThreadFunc(void *arg) {
             case 'a':
                 ++amount; //+1
                 break;
-            case 'f':
+
+            case 'f': //cancel all
                 WriteToFileInternalCount(fd);
                 break;
             case 'g':
@@ -226,7 +255,7 @@ void *ThreadFunc(void *arg) {
                     perror("close error g");
                 exit(EXIT_SUCCESS);
 
-            case 'h':
+            case 'h': //join all
                 for (i = 0; i < THREADPOOL_SIZE - 1; ++i)
                     Enqueue('X');
                 for (i = 0; i < THREADPOOL_SIZE; ++i)
@@ -237,7 +266,8 @@ void *ThreadFunc(void *arg) {
                 if (close(fd) != 0)
                     perror("close error h");
                 exit(EXIT_SUCCESS);
-            case 'X':
+
+            case 'X': //exit thread
                 pthread_exit(NULL);
         }
 
@@ -248,10 +278,10 @@ void *ThreadFunc(void *arg) {
         nanosleep(&t, NULL);
         AddToInternalCount(amount);
     }
-#pragma clang diagnostic pop
 }
 
-int main() {
+int main()
+{
     int fd, shmid = -1, i;
     key_t key;
     struct sembuf sops[SEMNUM];
@@ -259,7 +289,8 @@ int main() {
     pthread_mutexattr_t Attr;
 
     if ((fd = open(FILE_NAME, O_CREAT | O_WRONLY,
-                   S_IRUSR | S_IWUSR | S_IRGRP)) == -1) {
+                   S_IRUSR | S_IWUSR | S_IRGRP)) == -1)
+    {
         perror("open error");
         exit(EXIT_FAILURE);
     }
@@ -273,63 +304,74 @@ int main() {
         perror("atexit error");
 
     /* get key to shared memory and semaphores */
-    if ((key = ftok(KEY_FILE, KEY_CHAR)) == -1) {
+    if ((key = ftok(KEY_FILE, KEY_CHAR)) == -1)
+    {
         perror("ftok error");
         exit(EXIT_FAILURE);
     }
 
     /* create a shared memory */
-    if ((shmid = shmget(key, SHM_SIZE, 0)) == -1) {
+    if ((shmid = shmget(key, SHM_SIZE, 0)) == -1)
+    {
         perror("shmget error");
         exit(EXIT_FAILURE);
     }
 
     /* attach to the segment to get a pointer to it: */
     data = shmat(shmid, NULL, 0);
-    if (data == (char *) (-1)) {
+    if (data == (char *) (-1))
+    {
         perror("shmat error");
         exit(EXIT_FAILURE);
     }
 
     /* setting shared memory to delete once all process detach */
-    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
+    if (shmctl(shmid, IPC_RMID, NULL) == -1)
+    {
         perror("error shmctl failed");
         exit(EXIT_FAILURE);
     }
 
     /* Creating the read, write and queue semaphores */
-    if ((semid = semget(key, SEMNUM, 0600)) < 0) {
+    if ((semid = semget(key, SEMNUM, 0600)) < 0)
+    {
         perror("semget error");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutexattr_init(&Attr) != 0) {
+    if (pthread_mutexattr_init(&Attr) != 0)
+    {
         perror("attribute init failed");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutexattr_settype(&Attr, PTHREAD_MUTEX_ERRORCHECK) != 0) {
+    if (pthread_mutexattr_settype(&Attr, PTHREAD_MUTEX_ERRORCHECK) != 0)
+    {
         perror("attribute settype failed");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutex_init(&queueMutex, &Attr) != 0) {
+    if (pthread_mutex_init(&queueMutex, &Attr) != 0)
+    {
         perror("queue mutex error");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutex_init(&countMutex, &Attr) != 0) {
+    if (pthread_mutex_init(&countMutex, &Attr) != 0)
+    {
         perror("count mutex error");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutex_init(&fileMutex, &Attr) != 0) {
+    if (pthread_mutex_init(&fileMutex, &Attr) != 0)
+    {
         perror("file mutex error");
         exit(EXIT_FAILURE);
     }
 
     semarg.array = (unsigned short *) malloc(SEMNUM);
-    if (semarg.array == NULL) {
+    if (semarg.array == NULL)
+    {
         perror("malloc error 1");
         exit(EXIT_FAILURE);
     }
@@ -337,7 +379,8 @@ int main() {
     semarg.array[SEM_READ] = 0;
     semarg.array[SEM_WRITE] = 1;
     semarg.array[SEM_QUEUE] = 0;
-    if (semctl(semid, SEMNUM, SETALL, semarg) == -1) {
+    if (semctl(semid, SEMNUM, SETALL, semarg) == -1)
+    {
         perror("SETALL error");
         exit(EXIT_FAILURE);
     }
@@ -345,23 +388,23 @@ int main() {
     semarg.array = NULL;
 
     for (i = 0; i < THREADPOOL_SIZE; ++i)
+    {
         if (pthread_create(&(threadPool[i]), NULL, ThreadFunc, &fd) == -1) {
             perror("error creating thread");
             exit(EXIT_FAILURE);
         }
-    // call
+    }
 
     sops[0].sem_flg = 0;
 
-    //TODO delete this crap
     /* start reading the shared memory until finished by another thread */
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-noreturn"
-    while (1) {
+    while (1)
+    {
         /* locking the read semaphore */
         sops[0].sem_op = LOCK;
         sops[0].sem_num = SEM_READ;
-        if (semop(semid, sops, 1) == -1) {
+        if (semop(semid, sops, 1) == -1)
+        {
             perror("error locking SEMREAD");
             continue;
         }
@@ -373,12 +416,12 @@ int main() {
         /* unlocking the write semaphore */
         sops[0].sem_op = UNLOCK;
         sops[0].sem_num = SEM_WRITE;
-        if (semop(semid, sops, 1) == -1) {
+        if (semop(semid, sops, 1) == -1)
+        {
             perror("error unlocking SEMWRITE");
             continue;
         }
 
         Enqueue(temp);
     }
-#pragma clang diagnostic pop
 }
