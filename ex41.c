@@ -11,8 +11,9 @@
 #include <sys/sem.h>
 #include <errno.h>
 
-#define KEY_FILE "318459450.txt" //file for key
-#define KEY_CHAR 'T' //char for key
+#define FILE_NAME "./318459450.txt" //file for key
+#define KEY_FILE FILE_NAME        //file for key
+#define KEY_CHAR       'T'        //char for key
 #define SHM_SIZE 1024 //size of shared mem
 #define SEMNUM 3 //num of semaphores
 #define SEM_WRITE 0 //index of write semaphore
@@ -24,23 +25,27 @@
 int main()
 {
     int             shmid;
-    key_t           key;
+    key_t           shmKey, semKey;
     char            *data, action;
     int             semid;
-//    union semun     semarg;
     struct sembuf   sops[SEMNUM];
 
-    /* get key to shared memory */
-    if ((key = ftok(KEY_FILE, KEY_CHAR)) == -1) {
+    /* get shmKey to shared memory */
+    if ((shmKey = ftok(KEY_FILE, KEY_CHAR)) == -1)
+    {
         perror("ftok error");
         exit(EXIT_FAILURE);
     }
 
+    printf("shmkey is %d\n", shmKey);
+
     /* grab the shared memory created by server: */
-    if ((shmid = shmget(key, SHM_SIZE, 0)) == -1) {
-        perror("shmget error");
+    if ((shmid = shmget(shmKey, SHM_SIZE, 0644)) == -1) {
+        perror("server shmget error");
         exit(EXIT_FAILURE);
     }
+
+    printf("shmid is %d\n", shmid);
 
     /* attach to the segment to get a pointer to it: */
     data = shmat(shmid, NULL, 0);
@@ -49,8 +54,15 @@ int main()
         exit(EXIT_FAILURE);
     }
 
+    /* get semKey to semaphores */
+    if ((semKey = ftok(KEY_FILE, KEY_CHAR + 1)) == -1)
+    {
+        perror("ftok error 2");
+        exit(EXIT_FAILURE);
+    }
+
     /* grabbing the semaphores created by the server */
-    if ((semid=semget (key, SEMNUM , 0600 )) < 0)
+    if ((semid=semget (semKey, SEMNUM , 0600 )) < 0)
     {
         perror("semget error");
         if (shmdt(data) == -1) {

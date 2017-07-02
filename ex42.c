@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <string.h>
 
-#define FILE_NAME "318459450.txt" //file for key
+#define FILE_NAME "./318459450.txt" //file for key
 #define KEY_FILE FILE_NAME        //file for key
 #define KEY_CHAR       'T'        //char for key
 #define SHM_SIZE     1024         //size of shared mem
@@ -38,7 +38,7 @@ typedef struct QueueItem_t
     struct QueueItem_t *next;
 } QueueItem;
 
-typedef struct
+typedef struct Queue_t
 {
     QueueItem *first;
     QueueItem *end;
@@ -79,13 +79,17 @@ char Dequeue()
     if (jobQueue->first == NULL) //no elements in queue
         c = (char) -1;
     else
+    {
         c = jobQueue->first->action;
 
-    if (jobQueue->first == jobQueue->end) //only one item in queue
-        jobQueue->end = NULL;
+        if (jobQueue->first == jobQueue->end) //only one item in queue
+            jobQueue->end = NULL;
 
-    QueueItem *temp = jobQueue->first;
-    jobQueue->first = jobQueue->first->next; //"pop"
+        QueueItem *temp = jobQueue->first;
+        jobQueue->first = jobQueue->first->next; //"pop"
+        temp->next = NULL;
+        free(temp); //free item
+    }
 
     if (pthread_mutex_unlock(&queueMutex) != 0)
     {
@@ -93,8 +97,7 @@ char Dequeue()
         return (char) -1;
     }
 
-    temp->next = NULL;
-    free(temp); //free item
+
 
     return c;
 }
@@ -206,7 +209,7 @@ void WriteToFileInternalCount(int fd)
 {
     int temp = GetInternalCount();
     char buff[100];
-    sprintf(buff, "thread identifier is %u and internal_count is %d\n",
+    sprintf(buff, "thread identifier is %lu and internal_count is %d\n",
             pthread_self(), temp);
     if (write(fd, buff, strlen(buff)) == -1)
     {
@@ -283,19 +286,21 @@ void *ThreadFunc(void *arg)
 int main()
 {
     int fd, shmid = -1, i;
-    key_t key;
+    key_t shmKey, semKey;
     struct sembuf sops[SEMNUM];
     union semun semarg;
     pthread_mutexattr_t Attr;
 
-    if ((fd = open(FILE_NAME, O_CREAT | O_WRONLY,
-                   S_IRUSR | S_IWUSR | S_IRGRP)) == -1)
+    if ((fd = open(FILE_NAME, O_CREAT | O_WRONLY | O_TRUNC,
+                   S_IRUSR | S_IWUSR | S_IRGRP)) < 0)
     {
         perror("open error");
         exit(EXIT_FAILURE);
     }
 
-    jobQueue = (Queue *) malloc(sizeof(Queue));
+    printf("fd is %d\n", fd);
+
+    jobQueue = (Queue *) malloc(sizeof(struct Queue_t));
     if (jobQueue == NULL) {
         perror("malloc error");
         exit(EXIT_FAILURE);
@@ -303,19 +308,22 @@ int main()
     if (atexit(AtExitFunc) == -1)
         perror("atexit error");
 
-    /* get key to shared memory and semaphores */
-    if ((key = ftok(KEY_FILE, KEY_CHAR)) == -1)
+    /* get shmKey to shared memory */
+    if ((shmKey = ftok(FILE_NAME, KEY_CHAR)) == -1)
     {
         perror("ftok error");
         exit(EXIT_FAILURE);
     }
 
+    printf("shmkey is %d\n", shmKey);
+
     /* create a shared memory */
-    if ((shmid = shmget(key, SHM_SIZE, 0)) == -1)
-    {
-        perror("shmget error");
+    if ((shmid = shmget(shmKey, SHM_SIZE, 0644 | IPC_CREAT | IPC_EXCL)) == -1) {
+        perror("server shmget error");
         exit(EXIT_FAILURE);
     }
+
+    printf("shmid is %d\n", shmid);
 
     /* attach to the segment to get a pointer to it: */
     data = shmat(shmid, NULL, 0);
@@ -332,8 +340,15 @@ int main()
         exit(EXIT_FAILURE);
     }
 
+    /* get semKey to semaphores */
+    if ((semKey = ftok(KEY_FILE, KEY_CHAR + 1)) == -1)
+    {
+        perror("ftok error 2");
+        exit(EXIT_FAILURE);
+    }
+
     /* Creating the read, write and queue semaphores */
-    if ((semid = semget(key, SEMNUM, 0600)) < 0)
+    if ((semid = semget(semKey, SEMNUM, 0644 | IPC_CREAT)) < 0)
     {
         perror("semget error");
         exit(EXIT_FAILURE);
