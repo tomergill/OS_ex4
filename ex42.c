@@ -18,14 +18,16 @@
 #define KEY_FILE FILE_NAME        //file for key
 #define KEY_CHAR       'T'        //char for key
 #define SHM_SIZE     1024         //size of shared mem
-#define SEMNUM          2         //num of semaphores
+#define SEMNUM          3         //num of semaphores
 #define SEM_WRITE       0         //index of write semaphore
 #define SEM_READ        1         //index of read semaphore
 #define LOCK           -1         //the sem_op for lock
 #define UNLOCK          1         //the sem_op for unlock
 #define THREADPOOL_SIZE 5
+#define SEM_QUEUE       2
 
-union semun {
+union semun
+{
     int val;
     struct semid_ds *buf;
     ushort *array;
@@ -33,8 +35,8 @@ union semun {
 
 typedef struct QueueItem_t
 {
-    char                action;
-    struct QueueItem_t  *next;
+    char action;
+    struct QueueItem_t *next;
 } QueueItem;
 
 typedef struct
@@ -43,25 +45,40 @@ typedef struct
     QueueItem *end;
 } Queue;
 
-/***** Global Section *****/
-Queue *jobQueue = NULL;
-char *data = NULL;
-pthread_t threadPool[THREADPOOL_SIZE];
-int semid = -1;
+/********************** Global Section **********************/
+Queue           *jobQueue                            = NULL;
+char            *data                                = NULL;
+pthread_t       threadPool[THREADPOOL_SIZE];
+int             semid                                = -1;
 pthread_mutex_t queueMutex, countMutex, fileMutex;
-int internal_count = 0;
+int             internal_count                       = 0;
+/************************************************************/
 
 char Dequeue()
 {
-    if (pthread_mutex_lock(&queueMutex) != 0)
-    {
-        perror("error locking queueMutex in dequeue");
-        return (char)-1;
-    }
-    if (jobQueue->first == NULL)
-        return (char) -1;
+    char c;
+    /* decreasing the queue semaphore */
+    struct sembuf sops[1];
+    sops->sem_flg = 0;
+    sops->sem_num = SEM_QUEUE;
+    sops->sem_op = -1; //"lock"
+    if (semop(semid, sops, 1) != 0)
+        perror("-1 queue semaphore error dequeue");
 
-    char c = jobQueue->first->action;
+    /* locking the queue mutex */
+    if (pthread_mutex_lock(&queueMutex) != 0) {
+        perror("error locking queueMutex in dequeue");
+        sops->sem_num = SEM_QUEUE;
+        sops->sem_op = 1; //"unlock"
+        if (semop(semid, sops, 1) != 0)
+            perror("+1 queue semaphore error dequeue");
+        return (char) -1;
+    }
+
+    if (jobQueue->first == NULL) //no elements in queue
+        c = (char) -1;
+    else
+        c = jobQueue->first->action;
 
     if (jobQueue->first == jobQueue->end) //only one item in queue
         jobQueue->end = NULL;
@@ -69,10 +86,9 @@ char Dequeue()
     QueueItem *temp = jobQueue->first;
     jobQueue->first = jobQueue->first->next; //"pop"
 
-    if (pthread_mutex_unlock(&queueMutex) != 0)
-    {
+    if (pthread_mutex_unlock(&queueMutex) != 0) {
         perror("error unlocking queueMutex in dequeue");
-        return (char)-1;
+        return (char) -1;
     }
 
     temp->next = NULL;
@@ -81,19 +97,17 @@ char Dequeue()
     return c;
 }
 
-void Enqueue(char c)
-{
-    QueueItem *item = (QueueItem *)calloc(1, sizeof(QueueItem));
-    if (item == NULL)
-    {
+void Enqueue(char c) {
+
+    QueueItem *item = (QueueItem *) calloc(1, sizeof(QueueItem));
+    if (item == NULL) {
         perror("CALLOC ERROR");
         return;
     }
     item->next = NULL;
     item->action = c;
 
-    if (pthread_mutex_lock(&queueMutex) != 0)
-    {
+    if (pthread_mutex_lock(&queueMutex) != 0) {
         perror("error locking queueMutex in enqueue");
         return;
     }
@@ -101,14 +115,21 @@ void Enqueue(char c)
         jobQueue->first = jobQueue->end = item;
     else
         jobQueue->end = jobQueue->end->next = item;
-    if (pthread_mutex_unlock(&queueMutex) != 0)
-    {
+
+    struct sembuf sops[1];
+    sops->sem_flg = 0;
+    sops->sem_num = SEM_QUEUE;
+    sops->sem_op = 1; //"unlock"
+    if (semop(semid, sops, 1) != 0)
+        perror("+1 queue semaphore error enqueue");
+
+    if (pthread_mutex_unlock(&queueMutex) != 0) {
         perror("error unlocking queueMutex in enqueue");
         return;
     }
 }
 
-void atExitFunc() {
+void AtExitFunc() {
     if (jobQueue != NULL)
         free(jobQueue);
     if (data != NULL)
@@ -117,58 +138,57 @@ void atExitFunc() {
     if (semid >= 0)
         if (semctl(semid, SEMNUM, IPC_RMID) == -1)
             perror("delete semaphores failed");
-    pthread_mutex_destroy(&queueMutex);
-    pthread_mutex_destroy(&countMutex);
-    pthread_mutex_destroy(&fileMutex);
+    //unlocking in case mutex was locked when exiting
+    pthread_mutex_unlock(&queueMutex);
+    pthread_mutex_unlock(&countMutex);
+    pthread_mutex_unlock(&fileMutex);
+
+    if (pthread_mutex_destroy(&queueMutex) != 0)
+        perror("error destroying queue mutex");
+    if (pthread_mutex_destroy(&countMutex) != 0)
+        perror("error destroying count mutex");
+    if (pthread_mutex_destroy(&fileMutex) != 0)
+    perror("error destroying file mutex");
 }
 
-void AddToInternalCount(int amount)
-{
-    if (pthread_mutex_lock(&countMutex) != 0)
-    {
+void AddToInternalCount(int amount) {
+    if (pthread_mutex_lock(&countMutex) != 0) {
         perror("error locking countMutex in add");
         return;
     }
     internal_count += amount;
-    if (pthread_mutex_unlock(&countMutex) != 0)
-    {
+    if (pthread_mutex_unlock(&countMutex) != 0) {
         perror("error unlocking countMutex in add");
         return;
     }
 }
 
-int GetInternalCount()
-{
+int GetInternalCount() {
     int temp;
-    if (pthread_mutex_lock(&countMutex) != 0)
-    {
+    if (pthread_mutex_lock(&countMutex) != 0) {
         perror("error locking countMutex in add");
         return -1;
     }
     temp = internal_count;
-    if (pthread_mutex_unlock(&countMutex) != 0)
-    {
+    if (pthread_mutex_unlock(&countMutex) != 0) {
         perror("error unlocking countMutex in add");
         return -1;
     }
     return temp;
 }
 
-void WriteToFileInternalCount(int fd)
-{
+void WriteToFileInternalCount(int fd) {
     int temp = GetInternalCount();
     char buff[100];
     sprintf(buff, "thread identifier is %u and internal_count is %d\n",
             pthread_self(), temp);
-    if (write(fd, buff, strlen(buff)) == -1)
-    {
+    if (write(fd, buff, strlen(buff)) == -1) {
         perror("write error");
         exit(EXIT_FAILURE);
     }
 }
 
-void* threadFunc(void *arg)
-{
+void *ThreadFunc(void *arg) {
     int fd = *(int *) arg, x, amount, i;
     char action;
     struct timespec t;
@@ -176,12 +196,10 @@ void* threadFunc(void *arg)
     //TODO remove this crap
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
-    while (1)
-    {
+    while (1) {
         amount = 0;
         action = Dequeue(); //get the job
-        switch (action)
-        {
+        switch (action) {
             default:
                 break;
             case 'e':
@@ -207,7 +225,10 @@ void* threadFunc(void *arg)
                 if (close(fd) != 0)
                     perror("close error g");
                 exit(EXIT_SUCCESS);
+
             case 'h':
+                for (i = 0; i < THREADPOOL_SIZE - 1; ++i)
+                    Enqueue('X');
                 for (i = 0; i < THREADPOOL_SIZE; ++i)
                     if (threadPool[i] != pthread_self())
                         if (pthread_join(threadPool[i], NULL) != 0)
@@ -216,54 +237,48 @@ void* threadFunc(void *arg)
                 if (close(fd) != 0)
                     perror("close error h");
                 exit(EXIT_SUCCESS);
-                break;
+            case 'X':
+                pthread_exit(NULL);
         }
+
         // for letters a to e
         x = rand() % 91 + 10; // 10<=x<=100
         t.tv_nsec = x;
-        t.tv_sec =0;
+        t.tv_sec = 0;
         nanosleep(&t, NULL);
         AddToInternalCount(amount);
     }
 #pragma clang diagnostic pop
 }
 
-int main()
-{
-    int             fd, shmid = -1, i;
-    key_t           key;
-    struct sembuf   sops[SEMNUM];
-    union semun     semarg;
-
-    semarg.array = (unsigned short *) malloc(SEMNUM);
-    if (semarg.array == NULL) {
-        perror("malloc error 1");
-        exit(EXIT_FAILURE);
-    }
+int main() {
+    int fd, shmid = -1, i;
+    key_t key;
+    struct sembuf sops[SEMNUM];
+    union semun semarg;
+    pthread_mutexattr_t Attr;
 
     if ((fd = open(FILE_NAME, O_CREAT | O_WRONLY,
-                   S_IRUSR | S_IWUSR | S_IRGRP)) == -1)
-    {
+                   S_IRUSR | S_IWUSR | S_IRGRP)) == -1) {
         perror("open error");
         exit(EXIT_FAILURE);
     }
 
     jobQueue = (Queue *) malloc(sizeof(Queue));
-    if (jobQueue == NULL)
-    {
+    if (jobQueue == NULL) {
         perror("malloc error");
         exit(EXIT_FAILURE);
     }
-    if (atexit(atExitFunc) == -1)
+    if (atexit(AtExitFunc) == -1)
         perror("atexit error");
 
-    /* get key to shared memory */
+    /* get key to shared memory and semaphores */
     if ((key = ftok(KEY_FILE, KEY_CHAR)) == -1) {
         perror("ftok error");
         exit(EXIT_FAILURE);
     }
 
-    /* grab the shared memory created by server: */
+    /* create a shared memory */
     if ((shmid = shmget(key, SHM_SIZE, 0)) == -1) {
         perror("shmget error");
         exit(EXIT_FAILURE);
@@ -271,51 +286,69 @@ int main()
 
     /* attach to the segment to get a pointer to it: */
     data = shmat(shmid, NULL, 0);
-    if (data == (char *)(-1)) {
+    if (data == (char *) (-1)) {
         perror("shmat error");
         exit(EXIT_FAILURE);
     }
 
-    /* Creating the read&write semaphores */
-    if ((semid=semget (key, SEMNUM , 0600 )) < 0)
-    {
-        perror("semget error");
-        if (shmdt(data) == -1) {
-            perror("shared memory detach error");
-            exit(EXIT_FAILURE);
-        }
+    /* setting shared memory to delete once all process detach */
+    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
+        perror("error shmctl failed");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutex_init(&queueMutex, PTHREAD_MUTEX_ERRORCHECK) != 0)
-    {
+    /* Creating the read, write and queue semaphores */
+    if ((semid = semget(key, SEMNUM, 0600)) < 0) {
+        perror("semget error");
+        exit(EXIT_FAILURE);
+    }
+
+    if (pthread_mutexattr_init(&Attr) != 0) {
+        perror("attribute init failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (pthread_mutexattr_settype(&Attr, PTHREAD_MUTEX_ERRORCHECK) != 0) {
+        perror("attribute settype failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (pthread_mutex_init(&queueMutex, &Attr) != 0) {
         perror("queue mutex error");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutex_init(&countMutex, PTHREAD_MUTEX_ERRORCHECK) != 0)
-    {
+    if (pthread_mutex_init(&countMutex, &Attr) != 0) {
         perror("count mutex error");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_mutex_init(&fileMutex, PTHREAD_MUTEX_ERRORCHECK) != 0)
-    {
+    if (pthread_mutex_init(&fileMutex, &Attr) != 0) {
         perror("file mutex error");
         exit(EXIT_FAILURE);
     }
 
+    semarg.array = (unsigned short *) malloc(SEMNUM);
+    if (semarg.array == NULL) {
+        perror("malloc error 1");
+        exit(EXIT_FAILURE);
+    }
     //setting values
     semarg.array[SEM_READ] = 0;
-    semarg.array[SEM_WRITE] = 0;
-    if (semctl(semid, SEMNUM, SETALL, semarg) == -1)
-    {
+    semarg.array[SEM_WRITE] = 1;
+    semarg.array[SEM_QUEUE] = 0;
+    if (semctl(semid, SEMNUM, SETALL, semarg) == -1) {
         perror("SETALL error");
         exit(EXIT_FAILURE);
     }
+    free(semarg.array);
+    semarg.array = NULL;
 
-    for (i =0; i < THREADPOOL_SIZE; ++i)
-        pthread_create(&(threadPool[i]), NULL, threadFunc, NULL); //TODO func
+    for (i = 0; i < THREADPOOL_SIZE; ++i)
+        if (pthread_create(&(threadPool[i]), NULL, ThreadFunc, &fd) == -1) {
+            perror("error creating thread");
+            exit(EXIT_FAILURE);
+        }
     // call
 
     sops[0].sem_flg = 0;
@@ -328,8 +361,7 @@ int main()
         /* locking the read semaphore */
         sops[0].sem_op = LOCK;
         sops[0].sem_num = SEM_READ;
-        if (semop(semid, sops, 1) == -1)
-        {
+        if (semop(semid, sops, 1) == -1) {
             perror("error locking SEMREAD");
             continue;
         }
@@ -341,8 +373,7 @@ int main()
         /* unlocking the write semaphore */
         sops[0].sem_op = UNLOCK;
         sops[0].sem_num = SEM_WRITE;
-        if (semop(semid, sops, 1) == -1)
-        {
+        if (semop(semid, sops, 1) == -1) {
             perror("error unlocking SEMWRITE");
             continue;
         }

@@ -13,7 +13,7 @@
 #define KEY_FILE "318459450.txt" //file for key
 #define KEY_CHAR 'T' //char for key
 #define SHM_SIZE 1024 //size of shared mem
-#define SEMNUM 2 //num of semaphores
+#define SEMNUM 3 //num of semaphores
 #define SEM_WRITE 0 //index of write semaphore
 #define SEM_READ 1  //index of read semaphore
 #define LOCK -1 //the sem_op for lock
