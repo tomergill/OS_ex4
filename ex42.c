@@ -22,38 +22,57 @@
 #define SEM_READ        1         //index of read semaphore
 #define LOCK           -1         //the sem_op for lock
 #define UNLOCK          1         //the sem_op for unlock
-#define THREADPOOL_SIZE 5
-#define SEM_QUEUE       2
+#define THREADPOOL_SIZE 5         //number of threads in threadpool
+#define SEM_QUEUE       2         //index of the queue semaphore
 
-union semun {
+/* for semctl */
+union semun
+{
     int val;
     struct semid_ds *buf;
     ushort *array;
 };
 
-typedef struct QueueItem_t {
+/* represents an item in a linked-list queue holding a char */
+typedef struct QueueItem_t
+{
     char action;
     struct QueueItem_t *next;
 } QueueItem;
 
-typedef struct Queue_t {
+/* linked-list queue, holding pointers to the first and last nodes in queue */
+typedef struct Queue_t
+{
     QueueItem *first;
     QueueItem *end;
 } Queue;
 
-/********************** Global Section **********************/
-Queue *jobQueue = NULL;
-char *data = NULL;
-pthread_t threadPool[THREADPOOL_SIZE];
-int semid = -1;
+/****************************** Global Section ********************************/
+Queue           *jobQueue                           = NULL;
+char            *data                               = NULL;
+pthread_t       threadPool[THREADPOOL_SIZE];
+int             semid                               = -1;
 pthread_mutex_t queueMutex, countMutex, fileMutex;
-int internal_count = 0;
-int shmid = -1;
+int             internal_count                      =  0;
+int             shmid                               = -1;
+/******************************************************************************/
 
-/************************************************************/
-
-char Dequeue() {
-    char c;
+/******************************************************************************
+ * function name: Dequeue
+ * The Input: None.
+ * The output: Gets the first char (job) in the jobQueue and pulling it out
+ *      of the queue and returning it. If the queue is empty waits to it to
+ *      fill.
+ * The Function operation: Decreases the queue semaphore (aka saying there is
+ *      one less item in the queue now - if there were 0 the thread waits to
+ *      be awaken when the semaphore gets its value up). Also, the queue
+ *      mutex is locked so no other thread will try to use it until the job
+ *      is out. Then the top job is dequeued, the mutex unlocked and the
+ *      former-top job is returned.
+*******************************************************************************/
+char Dequeue()
+{
+    char job;
 
     /* decreasing the queue semaphore */
     struct sembuf sops[1];
@@ -73,10 +92,10 @@ char Dequeue() {
         return (char) -1;
     }
 
-    if (jobQueue->first == NULL) //no elements in queue
-        c = (char) -1;
+    if (jobQueue->first == NULL) //no elements in queue - shouldn't happen
+        job = (char) -1;
     else {
-        c = jobQueue->first->action;
+        job = jobQueue->first->action;
 
         if (jobQueue->first == jobQueue->end) //only one item in queue
             jobQueue->end = NULL;
@@ -93,9 +112,21 @@ char Dequeue() {
     }
 
 
-    return c;
+    return job;
 }
 
+/******************************************************************************
+ * function name: Enqueue
+ * The Input: A char (job) to insert to the queue.
+ * The output: Adds the job to the end of the queue.
+ * The Function operation: A new queue item is created, then gets the right
+ *      data. The queue mutex is locked so no other thread will try to use it
+ *      until the job is in. Then the new item is added to the end of the
+ *      queue, and the function increases the queue semaphore (aka saying
+ *      there is one more item in the queue now - if there were 0 the threads
+ *      waiting to be awaken could continue their operations), and the mutex
+ *      unlocked.
+*******************************************************************************/
 void Enqueue(char c) {
 
     QueueItem *item = (QueueItem *) calloc(1, sizeof(QueueItem));
@@ -128,6 +159,16 @@ void Enqueue(char c) {
     }
 }
 
+/******************************************************************************
+ * function name: AtExitFunc
+ * The Input: None.
+ * The output: Cleans the resources the process uses and then continues the
+ *      exit. Happens after exit() is called.
+ * The Function operation: Frees each item in the jobQueue, and then the
+ *      queue itself. Then detaches from the shared memory, deletes it,
+ *      the semaphores and the mutexes (which is unlocked in case another thread
+ *      locked them and died before it could unlock them),
+*******************************************************************************/
 void AtExitFunc() {
     /* freeing the queue */
     if (jobQueue != NULL) {
@@ -163,6 +204,13 @@ void AtExitFunc() {
         perror("error destroying file mutex");
 }
 
+/******************************************************************************
+ * function name: AddToInternalCount
+ * The Input: Amount to add to internal count.
+ * The output: Adds the requested amount to internal count.
+ * The Function operation: Locks the internal count mutex, adds the amount
+ *      and then unlocks said mutex.
+*******************************************************************************/
 void AddToInternalCount(int amount) {
     if (pthread_mutex_lock(&countMutex) != 0) {
         perror("error locking countMutex in add");
@@ -175,6 +223,13 @@ void AddToInternalCount(int amount) {
     }
 }
 
+/******************************************************************************
+ * function name: GetInternalCount
+ * The Input: None.
+ * The output: Gets the current value of internal count.
+ * The Function operation: Locks the internal count mutex, saves the value
+ *      and then unlocks said mutex and reutrns the saved value.
+*******************************************************************************/
 int GetInternalCount() {
     int temp;
     if (pthread_mutex_lock(&countMutex) != 0) {
@@ -189,18 +244,39 @@ int GetInternalCount() {
     return temp;
 }
 
+/******************************************************************************
+ * function name: WriteToFileInternalCount
+ * The Input: File descriptor to write to.
+ * The output: Writes the thread id and internal count to the file.
+ * The Function operation: Locks the file mutex, writes and then unlocks.
+*******************************************************************************/
 void WriteToFileInternalCount(int fd) {
     int temp = GetInternalCount();
     char buff[100];
     sprintf(buff, "thread identifier is %lu and internal_count is %d\n",
             pthread_self(), temp);
+    if (pthread_mutex_lock(&fileMutex) != 0) {
+        perror("error locking fileMutex in write");
+        exit(EXIT_FAILURE);
+    }
     if (write(fd, buff, strlen(buff)) == -1) {
         perror("write error");
         exit(EXIT_FAILURE);
     }
+    if (pthread_mutex_unlock(&fileMutex) != 0) {
+        perror("error unlocking fileMutex in write");
+        exit(EXIT_FAILURE);
+    }
 }
 
-void *ThreadFunc(void *arg) {
+/******************************************************************************
+ * function name: ThreadFunc
+ * The Input: File descriptor to write to.
+ * The output: Does jobs from the job queue until gets a job to terminate.
+ * The Function operation: Gets the first job form the job queue, does it
+ *      (adds to internal count / writes to the file / terminates) on and on.
+*******************************************************************************/
+void * ThreadFunc(void *arg) {
     int fd = *(int *) arg, x, amount, i;
     char action;
     struct timespec t;
@@ -229,18 +305,37 @@ void *ThreadFunc(void *arg) {
                 WriteToFileInternalCount(fd);
                 break;
             case 'X': //exit thread
+                WriteToFileInternalCount(fd);
                 pthread_exit(NULL);
         }
 
         // for letters a to e
         x = rand() % 91 + 10; // 10<=x<=100
+        printf("sleeping for %d nanoseconds\n", x);
         t.tv_nsec = x;
         t.tv_sec = 0;
-        nanosleep(&t, NULL);
+        if (nanosleep(&t, NULL) != 0)
+            perror("nanosleep error");
         AddToInternalCount(amount);
     }
 }
 
+/******************************************************************************
+ * function name: main
+ * The Input: None.
+ * The output: Creates a thread pool to handle jobs from the clients and
+ *      continues to bring jobs from the shared memory (written to by
+ *      clients) to the job queue.
+ * The Function operation: Creates a 318459450.txt file, the job queue, the
+ *      shared memory, the semaphores and the mutexes. Then in a loop
+ *      decreases the read semaphore (saying it now reads - if it is 0 the
+ *      server is stuck because no client has written anything), reads the
+ *      job, increases the write semaphore (saying it's ready to get another
+ *      job) and then adds the job read to the queue.
+ *      This is done until got 'h' - adds termination jobs to all threads
+ *      after all their jobs and waits for them - or 'g' - cancels all the
+ *      threads, then writes to the file and exits.
+*******************************************************************************/
 int main() {
     int fd, i;
     key_t shmKey, semKey;
