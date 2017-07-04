@@ -357,6 +357,8 @@ int main() {
 
 
 
+    printf("my thread id is %lu\n", pthread_self());
+
     /* start reading the shared memory until finished by another thread */
     while (1) {
         /* locking the read semaphore */
@@ -390,7 +392,7 @@ int main() {
                 exit(EXIT_SUCCESS);
 
             case 'h': //join all
-                for (i = 0; i < THREADPOOL_SIZE - 1; ++i)
+                for (i = 0; i < THREADPOOL_SIZE; ++i)
                     Enqueue('X');
                 for (i = 0; i < THREADPOOL_SIZE; ++i)
                     if (pthread_join(threadPool[i], NULL) != 0)
