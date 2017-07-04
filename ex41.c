@@ -40,8 +40,9 @@ int main()
     printf("shmkey is %d\n", shmKey);
 
     /* grab the shared memory created by server: */
-    if ((shmid = shmget(shmKey, SHM_SIZE, 0644)) == -1) {
-        perror("server shmget error");
+    shmid = shmget(shmKey, SHM_SIZE, 0666);
+    if (shmid == -1) {
+        perror("shmget error");
         exit(EXIT_FAILURE);
     }
 

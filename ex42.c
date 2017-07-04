@@ -228,6 +228,8 @@ void *ThreadFunc(void *arg)
     {
         amount = 0;
         action = Dequeue(); //get the job
+        if (action == (char) -1)
+            continue;
         printf("doing %c\n", action);
         switch (action)
         {
@@ -291,8 +293,7 @@ int main()
     union semun semarg;
     pthread_mutexattr_t Attr;
 
-    if ((fd = open(FILE_NAME, O_CREAT | O_WRONLY | O_TRUNC,
-                   S_IRUSR | S_IWUSR | S_IRGRP)) < 0)
+    if ((fd = open(FILE_NAME, O_CREAT | O_RDWR | O_TRUNC, 0666)) < 0)
     {
         perror("open error");
         exit(EXIT_FAILURE);
@@ -318,7 +319,7 @@ int main()
     printf("shmkey is %d\n", shmKey);
 
     /* create a shared memory */
-    if ((shmid = shmget(shmKey, SHM_SIZE, 0644 | IPC_CREAT | IPC_EXCL)) == -1) {
+    if ((shmid = shmget(shmKey, SHM_SIZE, 0666 | IPC_CREAT )) == -1) {
         perror("server shmget error");
         exit(EXIT_FAILURE);
     }
@@ -334,11 +335,11 @@ int main()
     }
 
     /* setting shared memory to delete once all process detach */
-    if (shmctl(shmid, IPC_RMID, NULL) == -1)
-    {
-        perror("error shmctl failed");
-        exit(EXIT_FAILURE);
-    }
+//    if (shmctl(shmid, IPC_RMID, NULL) == -1)
+//    {
+//        perror("error shmctl failed");
+//        exit(EXIT_FAILURE);
+//    }
 
     /* get semKey to semaphores */
     if ((semKey = ftok(KEY_FILE, KEY_CHAR + 1)) == -1)
@@ -348,7 +349,7 @@ int main()
     }
 
     /* Creating the read, write and queue semaphores */
-    if ((semid = semget(semKey, SEMNUM, 0644 | IPC_CREAT)) < 0)
+    if ((semid = semget(semKey, SEMNUM, 0666 | IPC_CREAT)) < 0)
     {
         perror("semget error");
         exit(EXIT_FAILURE);
