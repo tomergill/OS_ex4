@@ -106,7 +106,10 @@ int main()
                 perror("shared memory detach error");
             }
         }
-        //now to next action
+
+        if (action == 'g' || action == 'h')
+            break;
+
     } while (1);
 
     printf("finising up\n");
