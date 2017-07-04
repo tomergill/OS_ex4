@@ -26,7 +26,7 @@ int main()
 {
     int             shmid;
     key_t           shmKey, semKey;
-    char            *data, action;
+    char            *data, action, dummy;
     int             semid;
     struct sembuf   sops[SEMNUM];
 
@@ -45,8 +45,6 @@ int main()
         perror("shmget error");
         exit(EXIT_FAILURE);
     }
-
-    printf("shmid is %d\n", shmid);
 
     /* attach to the segment to get a pointer to it: */
     data = shmat(shmid, NULL, 0);
@@ -76,7 +74,7 @@ int main()
     sops->sem_flg = 0;
     do {
         printf("Please enter request code\n");
-        scanf("%c\n", &action);
+        scanf("%c%c", &action, &dummy);
         action = tolower(action);
         if (action < 'a' || action > 'i')
             continue;
